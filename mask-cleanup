@@ -1,0 +1,79 @@
+#!/bin/python
+from scipy.signal import convolve
+import nibabel as nib
+import numpy as np
+import sys
+import argparse
+
+def load_nii(string):
+    try:
+        return nib.load(string).get_fdata()
+    except:
+        raise argparse.ArgumentTypeError(f"{string} is not a valid NIFTI file!")
+
+def save_nii(data, file_path):
+    nib.save(nib.nifti1.Nifti1Image(data, None), file_path)
+
+def erode_threshold(magnitude, mask):
+    kernel = np.ones((3,3,3))
+
+    std  = magnitude[mask==1].std()
+    mean = magnitude[mask==1].mean()
+
+    prev_mask = np.array(mask)
+    new_mask  = None
+
+    iters=0
+    
+    while True:
+        iters += 1
+        print(iters, end=' ')
+        sys.stdout.flush()
+        
+        if new_mask is not None:
+            prev_mask = new_mask
+
+        boundary = convolve(prev_mask, kernel, 'same')
+        inner_boundary = np.logical_and(boundary > 0, boundary < 18) * prev_mask
+        outer_boundary = np.array(((boundary > 10) - prev_mask) > 0, dtype=np.int16)
+
+        to_erode  = inner_boundary * (magnitude < mean - std*2.5)
+        to_dilate = outer_boundary * (magnitude > mean - std*1.5)
+
+        new_mask = prev_mask - to_erode + to_dilate
+
+        if np.array_equal(new_mask, prev_mask): break
+
+    print()
+    print("completed after " + str(iters) + " iters")
+    return new_mask
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="clean a NIFTI mask by eroding voxels with low signal " +
+        "intensity and into voxels with high signal intensity."
+    )
+
+    parser.add_argument(
+        'mask',
+        type=load_nii,
+        help='the mask file'
+    )
+
+    parser.add_argument(
+        'magnitude',
+        type=load_nii,
+        help='the magnitude file'
+    )
+
+    parser.add_argument(
+        'output',
+        help='the desired output filename of the new mask'
+    )
+
+    args = parser.parse_args()
+    mask = args.mask
+    magnitude = args.magnitude
+
+    new_mask = erode_threshold(magnitude, mask)
+    save_nii(new_mask, args.output)
